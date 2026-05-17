@@ -1,0 +1,40 @@
+# System files
+.DS_Store
+NTUSER.DAT*
+*.regtrans-ms
+*.blf
+*.LOG*
+.ini
+
+# IDE
+.vscode/
+.vscode-shared/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+AppData/
+OneDrive/
+.ssh/
+.bash_history
+
+# Downloads
+tiktok_downloads/
+
+# Unrelated projects
+VirtualBox VMs/
+Nutri_AI/
+latinowott-project/
+telegram-bot/
+Downloads/
+Desktop/
+Documents/
