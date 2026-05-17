@@ -13,10 +13,17 @@ import requests
 from google import genai
 from google.genai import types
 
+
+def getenv_required(key: str, default: str | None = None) -> str:
+    value = os.getenv(key, default)
+    if not value:
+        raise RuntimeError(f"Environment variable {key} is required.")
+    return value
+
 APIFY_TOKEN = getenv_required("APIFY_TOKEN")
 ACTOR_ID = os.getenv("ACTOR_ID", "apidojo~tiktok-scraper")
 GEMINI_API_KEY = getenv_required("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 RUNWAY_API_KEY = getenv_required("RUNWAY_API_KEY")
 RUNWAY_API_BASE = os.getenv("RUNWAY_API_BASE", "https://api.dev.runwayml.com/v1")
 MIN_VIEWS = int(os.getenv("MIN_VIEWS", "10000"))
