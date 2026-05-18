@@ -439,8 +439,11 @@ Keep it authentic and easy to follow."""
     return prompt
 
 
-def generate_viral_video(format_data: dict, author: str) -> str | None:
-    """Generate video via RunwayML API (Gen-4 text-to-video)."""
+def generate_viral_video(format_data: dict, author: str) -> dict | None:
+    """Generate video via RunwayML API (Gen-4 text-to-video).
+
+    Returns {"path": local_filepath, "url": public_runway_url} on success, None on failure.
+    """
     if not select_simplest_format(format_data):
         print("  [!] Формат слишком сложный для генерации")
         return None
@@ -509,7 +512,7 @@ def generate_viral_video(format_data: dict, author: str) -> str | None:
 
                     size_mb = os.path.getsize(filepath) / 1_048_576
                     print(f"  Сохранено ({size_mb:.1f} МБ): {filepath}")
-                    return filepath
+                    return {"path": filepath, "url": video_url}
                 else:
                     print(f"  [!] Нет URL в ответе: {status_data}")
                     return None
@@ -528,6 +531,130 @@ def generate_viral_video(format_data: dict, author: str) -> str | None:
     except requests.exceptions.RequestException as e:
         print(f"  [!] Ошибка при запросе к RunwayML: {e}")
         return None
+
+
+# ─── ВЕБ-ФЛОУ (НЕИНТЕРАКТИВНЫЙ) ─────────────────────────────────────────────
+
+def run_pipeline(query: str, progress=None) -> dict:
+    """Non-interactive full pipeline for web use.
+
+    Calls progress(step, total, message) at each milestone.
+    Returns dict with: success, error, author, top_videos, format_info,
+    video_url, video_path.
+    """
+    import json
+
+    total_steps = 8
+    result = {
+        "success": False,
+        "error": None,
+        "author": None,
+        "top_videos": [],
+        "format_info": None,
+        "video_url": None,
+        "video_path": None,
+    }
+
+    def emit(step, msg):
+        if progress:
+            progress(step, total_steps, msg)
+
+    # Шаг 1: поиск
+    emit(1, "Ищу вирусные видео по запросу...")
+    filtered = search_viral_videos(query, min_views=1_000_000, max_results=20)
+    if not filtered:
+        result["error"] = "Не найдено видео с 1M+ просмотров. Попробуй другой запрос."
+        return result
+
+    # Шаг 2: топ-автор по сумме просмотров
+    emit(2, f"Найдено {len(filtered)} видео. Определяю топ-автора...")
+    author = find_top_author(filtered)
+    if not author:
+        result["error"] = "Не удалось определить автора"
+        return result
+    result["author"] = author
+
+    # Шаг 3: профиль автора
+    emit(3, f"Скрейплю профиль @{author}...")
+    profile_videos = get_profile_videos(author, max_items=40)
+    if not profile_videos:
+        result["error"] = f"Профиль @{author} пуст или не найден"
+        return result
+
+    # Шаг 4: топ-5 по просмотрам
+    top_5 = sorted(profile_videos, key=lambda v: v.get("views", 0), reverse=True)[:5]
+    result["top_videos"] = [
+        {
+            "views": v.get("views", 0),
+            "title": (v.get("title") or "")[:120],
+            "url": v.get("postPage"),
+        }
+        for v in top_5
+    ]
+    emit(4, f"Выбрал топ-{len(top_5)} видео автора по просмотрам")
+
+    # Шаг 5: скачивание
+    downloaded = []
+    for i, v in enumerate(top_5, 1):
+        emit(5, f"Скачиваю видео {i}/{len(top_5)}...")
+        try:
+            path = download_video(v, i)
+            if path:
+                downloaded.append(path)
+        except requests.exceptions.RequestException:
+            pass
+
+    if len(downloaded) < 2:
+        result["error"] = f"Скачано только {len(downloaded)} видео — недостаточно для анализа"
+        return result
+
+    # Шаг 6: Gemini анализ
+    analyses = []
+    for i, filepath in enumerate(downloaded, 1):
+        emit(6, f"Анализирую видео {i}/{len(downloaded)} через Gemini...")
+        try:
+            data = analyze_video(filepath)
+            analyses.append(data)
+        except Exception:
+            pass
+
+    if len(analyses) < 2:
+        result["error"] = f"Успешно проанализировано только {len(analyses)} — нужно минимум 2"
+        return result
+
+    # Шаг 7: поиск формата
+    emit(7, f"Ищу общий вирусный формат по {len(analyses)} видео...")
+    format_raw = find_viral_format(analyses)
+
+    if format_raw.strip() == "0":
+        result["error"] = "Общего вирусного формата у автора не найдено"
+        return result
+
+    try:
+        format_data = json.loads(format_raw)
+        result["format_info"] = format_data
+    except json.JSONDecodeError:
+        result["error"] = "Не удалось распарсить результат анализа формата"
+        return result
+
+    # Шаг 7.5: проверка простоты формата
+    if not select_simplest_format(format_data):
+        result["error"] = "Формат слишком сложный для автогенерации. Но анализ доступен."
+        result["success"] = True  # partial — есть анализ, но без видео
+        return result
+
+    # Шаг 8: генерация через RunwayML
+    emit(8, "Генерирую видео через RunwayML (~5-10 мин)...")
+    generated = generate_viral_video(format_data, author)
+    if not generated:
+        result["error"] = "Генерация видео не удалась (проверь RUNWAY_API_KEY и логи)"
+        result["success"] = True  # partial — есть анализ
+        return result
+
+    result["video_url"] = generated["url"]
+    result["video_path"] = generated["path"]
+    result["success"] = True
+    return result
 
 
 # ─── ГЛАВНЫЙ ФЛОУ ───────────────────────────────────────────────────────────
@@ -573,11 +700,11 @@ def main():
     for i, v in enumerate(profile_videos, 1):
         print_video(i, v)
 
-    # Шаг 4: случайные 5
+    # Шаг 4: топ-5 по просмотрам
     pick_count = min(5, len(profile_videos))
-    to_download = random.sample(profile_videos, pick_count)
+    to_download = sorted(profile_videos, key=lambda v: v.get("views", 0), reverse=True)[:pick_count]
 
-    print(f"\nСлучайно выбрано {pick_count} видео для скачивания:\n")
+    print(f"\nТоп-{pick_count} видео автора по просмотрам:\n")
     for i, v in enumerate(to_download, 1):
         print_video(i, v)
 
@@ -664,9 +791,10 @@ def main():
 
             try:
                 format_json = json.loads(result)
-                generated_path = generate_viral_video(format_json, author)
-                if generated_path:
-                    print(f"\n✓ Видео успешно сгенерировано: {generated_path}")
+                generated = generate_viral_video(format_json, author)
+                if generated:
+                    print(f"\n✓ Видео успешно сгенерировано: {generated['path']}")
+                    print(f"  URL: {generated['url']}")
                 else:
                     print(f"\n[!] Генерация видео не удалась или ключ не установлен")
             except (json.JSONDecodeError, Exception) as e:
