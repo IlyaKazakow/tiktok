@@ -534,8 +534,11 @@ def generate_viral_video(format_data: dict, author: str) -> dict | None:
 
 # ─── ВЕБ-ФЛОУ (НЕИНТЕРАКТИВНЫЙ) ─────────────────────────────────────────────
 
-def run_pipeline(query: str, progress=None) -> dict:
+def run_pipeline(query: str, progress=None, skip_generation: bool = False) -> dict:
     """Non-interactive full pipeline for web use.
+
+    If skip_generation=True, returns after Gemini format analysis
+    (no RunwayML call — saves money during testing).
 
     Calls progress(step, total, message) at each milestone.
     Returns dict with: success, error, author, top_videos, format_info,
@@ -543,7 +546,7 @@ def run_pipeline(query: str, progress=None) -> dict:
     """
     import json
 
-    total_steps = 8
+    total_steps = 7 if skip_generation else 8
     result = {
         "success": False,
         "error": None,
@@ -640,6 +643,11 @@ def run_pipeline(query: str, progress=None) -> dict:
         result["format_info"] = format_data
     except json.JSONDecodeError:
         result["error"] = "Не удалось распарсить результат анализа формата"
+        return result
+
+    # Если режим "только анализ" — выходим тут (без RunwayML)
+    if skip_generation:
+        result["success"] = True
         return result
 
     # Шаг 7.5: проверка простоты формата

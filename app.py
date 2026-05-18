@@ -14,14 +14,15 @@ JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 
 
-def _new_job(query: str) -> str:
+def _new_job(query: str, skip_generation: bool) -> str:
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {
             "query": query,
+            "skip_generation": skip_generation,
             "status": "running",
             "step": 0,
-            "total": 8,
+            "total": 7 if skip_generation else 8,
             "message": "Запускаю...",
             "log": [],
             "result": None,
@@ -46,9 +47,13 @@ def _progress(job_id: str):
     return cb
 
 
-def _run_job(job_id: str, query: str):
+def _run_job(job_id: str, query: str, skip_generation: bool):
     try:
-        result = tiktok_search.run_pipeline(query, progress=_progress(job_id))
+        result = tiktok_search.run_pipeline(
+            query,
+            progress=_progress(job_id),
+            skip_generation=skip_generation,
+        )
         with JOBS_LOCK:
             job = JOBS.get(job_id)
             if not job:
@@ -83,6 +88,9 @@ INDEX_HTML = """
   input[type=text] { flex:1; padding: 12px 14px; font-size:16px; border-radius:8px; border:1px solid #333; background:#1a1a1f; color:#eee; }
   button { padding: 12px 20px; font-size:16px; border-radius:8px; border:0; background:#ff2d55; color:#fff; cursor:pointer; font-weight:600; }
   button:disabled { opacity:0.5; cursor:wait; }
+  .opts { display:flex; align-items:center; gap:8px; margin: 0 0 16px; color:#aaa; font-size:14px; }
+  .opts input { width:18px; height:18px; cursor:pointer; }
+  .opts label { cursor:pointer; user-select:none; }
   .card { background:#1a1a1f; border:1px solid #2a2a30; border-radius:12px; padding:16px; margin-bottom:12px; }
   .progress-bar { background:#1a1a1f; border-radius:8px; height:8px; overflow:hidden; margin: 12px 0; }
   .progress-fill { background: linear-gradient(90deg, #ff2d55, #ff8a00); height:100%; transition: width 0.5s; }
@@ -109,6 +117,11 @@ INDEX_HTML = """
       <button type="submit" id="submitBtn">Запустить</button>
     </form>
 
+    <div class="opts">
+      <input type="checkbox" id="skipGen">
+      <label for="skipGen">Только анализ (без генерации видео — экономия ~$1)</label>
+    </div>
+
     <div id="progressBox" style="display:none">
       <div class="card">
         <div class="status-msg" id="statusMsg"></div>
@@ -132,6 +145,7 @@ const resultBox = document.getElementById('resultBox');
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const query = document.getElementById('query').value.trim();
+  const skipGen = document.getElementById('skipGen').checked;
   if (!query) return;
 
   btn.disabled = true;
@@ -145,7 +159,7 @@ form.addEventListener('submit', async (e) => {
     const res = await fetch('/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query })
+      body: JSON.stringify({ query, skip_generation: skipGen })
     });
     const { job_id, error } = await res.json();
     if (error) throw new Error(error);
@@ -283,11 +297,12 @@ def index():
 def search_endpoint():
     data = request.get_json() or {}
     query = data.get('query', '').strip()
+    skip_generation = bool(data.get('skip_generation'))
     if not query:
         return jsonify({'error': 'Query is required'}), 400
 
-    job_id = _new_job(query)
-    thread = threading.Thread(target=_run_job, args=(job_id, query), daemon=True)
+    job_id = _new_job(query, skip_generation)
+    thread = threading.Thread(target=_run_job, args=(job_id, query, skip_generation), daemon=True)
     thread.start()
     return jsonify({'job_id': job_id})
 
