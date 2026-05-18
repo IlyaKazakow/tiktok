@@ -84,14 +84,25 @@ def get_profile_videos(username: str, max_items: int = 40) -> list:
 
 # ─── ФИЛЬТР ─────────────────────────────────────────────────────────────────
 
+def _views(v: dict) -> int:
+    """Read view count tolerantly — Apify actors use different field names."""
+    return (
+        v.get("views")
+        or v.get("playCount")
+        or v.get("viewCount")
+        or v.get("play_count")
+        or 0
+    )
+
+
 def filter_by_views(videos: list, min_views: int = MIN_VIEWS) -> list:
-    return [v for v in videos if (v.get("views") or 0) >= min_views]
+    return [v for v in videos if _views(v) >= min_views]
 
 
 def search_viral_videos(query: str, min_views: int = 1_000_000, max_results: int = 20) -> list:
     print(f'Ищу видео с {format_number(min_views)}+ просмотров...')
     raw = search_videos(query, max_items=100)
-    filtered = [v for v in raw if (v.get("views") or 0) >= min_views]
+    filtered = [v for v in raw if _views(v) >= min_views]
     return filtered[:max_results]
 
 
@@ -103,7 +114,7 @@ def find_top_author(videos: list) -> str:
             continue
         if author not in author_stats:
             author_stats[author] = {"total_views": 0, "count": 0}
-        author_stats[author]["total_views"] += video.get("views", 0)
+        author_stats[author]["total_views"] += _views(video)
         author_stats[author]["count"] += 1
 
     if not author_stats:
@@ -565,24 +576,40 @@ def run_pipeline(query: str, progress=None, skip_generation: bool = False) -> di
     emit(1, "Ищу видео по запросу...")
     raw_videos = search_videos(query, max_items=100)
 
+    # Диагностика в Railway логи — пригодится если что-то идёт не так
+    if raw_videos:
+        sample_keys = list(raw_videos[0].keys())[:15]
+        print(f"DEBUG: Apify вернул {len(raw_videos)} видео. Поля первого: {sample_keys}", flush=True)
+        sample_views = [_views(v) for v in raw_videos[:5]]
+        print(f"DEBUG: Просмотры первых 5 видео: {sample_views}", flush=True)
+
     filtered = []
     used_threshold = None
-    for threshold in (1_000_000, 500_000, 100_000):
-        candidates = [v for v in raw_videos if (v.get("views") or 0) >= threshold]
+    for threshold in (1_000_000, 500_000, 100_000, 10_000):
+        candidates = [v for v in raw_videos if _views(v) >= threshold]
         if candidates:
             filtered = candidates[:20]
             used_threshold = threshold
             break
 
     if not filtered:
+        max_v = max((_views(v) for v in raw_videos), default=0)
+        sample_keys = list(raw_videos[0].keys())[:12] if raw_videos else []
         result["error"] = (
-            f"Apify нашёл {len(raw_videos)} видео по запросу, но ни одно не набрало даже 100K просмотров. "
-            f"Попробуй другую тему или на английском."
+            f"Apify вернул {len(raw_videos)} видео, но макс. просмотров: {max_v:,}. "
+            f"Поля в данных: {sample_keys}. "
+            f"Скорее всего, новый Apify токен с ограничениями (free trial). "
+            f"Проверь квоту в console.apify.com → Billing."
         )
         return result
 
     # Шаг 2: топ-автор по сумме просмотров
-    threshold_label = f"{used_threshold // 1000}K" if used_threshold < 1_000_000 else "1M"
+    if used_threshold >= 1_000_000:
+        threshold_label = "1M"
+    elif used_threshold >= 1000:
+        threshold_label = f"{used_threshold // 1000}K"
+    else:
+        threshold_label = str(used_threshold)
     emit(2, f"Найдено {len(filtered)} видео с {threshold_label}+ просмотров. Определяю топ-автора...")
     author = find_top_author(filtered)
     if not author:
