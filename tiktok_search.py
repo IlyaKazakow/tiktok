@@ -225,11 +225,10 @@ SCENE_PROMPT = """Ты аналитик вирусного контента. Т�
 
 def _upload_and_wait(client, filepath: str):
     """Upload file to Gemini Files API and wait until ready."""
-    with open(filepath, "rb") as f:
-        video_file = client.files.upload(
-            file=f,
-            config=types.UploadFileConfig(mime_type="video/mp4"),
-        )
+    video_file = client.files.upload(
+        file=filepath,
+        config=types.UploadFileConfig(mime_type="video/mp4"),
+    )
     while video_file.state.name == "PROCESSING":
         time.sleep(3)
         video_file = client.files.get(name=video_file.name)
@@ -595,31 +594,37 @@ def run_pipeline(query: str, progress=None) -> dict:
 
     # Шаг 5: скачивание
     downloaded = []
+    download_errors = []
     for i, v in enumerate(top_5, 1):
         emit(5, f"Скачиваю видео {i}/{len(top_5)}...")
         try:
             path = download_video(v, i)
             if path:
                 downloaded.append(path)
-        except requests.exceptions.RequestException:
-            pass
+        except requests.exceptions.RequestException as e:
+            download_errors.append(f"Видео {i}: {type(e).__name__}: {e}")
 
     if len(downloaded) < 2:
-        result["error"] = f"Скачано только {len(downloaded)} видео — недостаточно для анализа"
+        details = " | ".join(download_errors) if download_errors else "нет деталей"
+        result["error"] = f"Скачано только {len(downloaded)} видео — недостаточно для анализа. {details}"
         return result
 
     # Шаг 6: Gemini анализ
     analyses = []
+    analysis_errors = []
     for i, filepath in enumerate(downloaded, 1):
         emit(6, f"Анализирую видео {i}/{len(downloaded)} через Gemini...")
         try:
             data = analyze_video(filepath)
             analyses.append(data)
-        except Exception:
-            pass
+        except Exception as e:
+            err_short = f"{type(e).__name__}: {str(e)[:160]}"
+            analysis_errors.append(f"Видео {i}: {err_short}")
+            emit(6, f"Видео {i}: ОШИБКА — {err_short[:120]}")
 
     if len(analyses) < 2:
-        result["error"] = f"Успешно проанализировано только {len(analyses)} — нужно минимум 2"
+        details = " | ".join(analysis_errors) if analysis_errors else "нет деталей"
+        result["error"] = f"Успешно проанализировано только {len(analyses)} — нужно минимум 2. Причины: {details}"
         return result
 
     # Шаг 7: поиск формата
