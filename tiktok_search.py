@@ -561,15 +561,29 @@ def run_pipeline(query: str, progress=None, skip_generation: bool = False) -> di
         if progress:
             progress(step, total_steps, msg)
 
-    # Шаг 1: поиск
-    emit(1, "Ищу вирусные видео по запросу...")
-    filtered = search_viral_videos(query, min_views=1_000_000, max_results=20)
+    # Шаг 1: поиск (1 Apify-запрос) + каскадный фильтр по просмотрам
+    emit(1, "Ищу видео по запросу...")
+    raw_videos = search_videos(query, max_items=100)
+
+    filtered = []
+    used_threshold = None
+    for threshold in (1_000_000, 500_000, 100_000):
+        candidates = [v for v in raw_videos if (v.get("views") or 0) >= threshold]
+        if candidates:
+            filtered = candidates[:20]
+            used_threshold = threshold
+            break
+
     if not filtered:
-        result["error"] = "Не найдено видео с 1M+ просмотров. Попробуй другой запрос."
+        result["error"] = (
+            f"Apify нашёл {len(raw_videos)} видео по запросу, но ни одно не набрало даже 100K просмотров. "
+            f"Попробуй другую тему или на английском."
+        )
         return result
 
     # Шаг 2: топ-автор по сумме просмотров
-    emit(2, f"Найдено {len(filtered)} видео. Определяю топ-автора...")
+    threshold_label = f"{used_threshold // 1000}K" if used_threshold < 1_000_000 else "1M"
+    emit(2, f"Найдено {len(filtered)} видео с {threshold_label}+ просмотров. Определяю топ-автора...")
     author = find_top_author(filtered)
     if not author:
         result["error"] = "Не удалось определить автора"
