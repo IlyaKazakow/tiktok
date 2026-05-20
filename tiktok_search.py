@@ -65,13 +65,14 @@ def run_actor(payload: dict) -> list:
 
 def search_videos(query: str, max_items: int = 50) -> list:
     print(f'Ищу по запросу "{query}" (ожидание 30-60 сек)...')
-    return run_actor({
+    raw = run_actor({
         "keywords": [query],
         "maxItems": max_items,
         "sortType": "RELEVANCE",
-        "location": "RU",
         "dateRange": "DEFAULT",
     })
+    # Actor возвращает {"noResults": true}-плейсхолдеры когда ничего не нашёл — отфильтровываем
+    return [v for v in raw if not v.get("noResults")]
 
 
 def get_profile_videos(username: str, max_items: int = 40) -> list:
